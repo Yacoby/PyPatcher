@@ -1,0 +1,6 @@
+PyPatcher is a project intended to allow patches for python programs to be
+generated and silently downloaded and installed, mimicing Google Chromes 
+update model.
+
+It is designed to cope with compiled python programs (such as projects
+compiled with py2exe) as well as pure python projects.
