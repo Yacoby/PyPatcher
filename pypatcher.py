@@ -14,11 +14,9 @@ import difflib
 import tempfile
 import zipfile
 import json
-from contextlib import closing
-
-import patch
-
-#constants
+import hashlib
+import sqlite3
+import Queue as queue
 
 #the binary patching/dif files
 BSDIFF = 'bsdiff.exe'
@@ -42,7 +40,7 @@ def getFileMd5(filePath):
         h.update(f.read())
     return h.hexdigest()
 
-class PartialURLOpener(urllib.FancyURLopener):
+class PartialUrlOpener(urllib.FancyURLopener):
     """
     Create sub-class in order to overide error 206.  This error means a
     partial file is being sent
@@ -109,7 +107,7 @@ class PartialDownlader(threading.Thread):
                                dst varchar(255)
                            )''')
                            
-    def startDownload(callback=None):
+    def startDownload(self, callback=None):
         self.callback = callback
         self.start()
 
@@ -118,22 +116,22 @@ class PartialDownlader(threading.Thread):
             dlInfo = self.toDownload.get()
             self._downloadFile(dlInfo['src'], dlInfo['tmp'])
             shutil.move(dlInfo['tmp'], dlInfo['dst'])
-            self._sqlTRemDl(dlInfo['dst'])
+            self._sqlTRemoveDl(dlInfo['dst'])
 
         if self.callback:
             self.callback()
 
     def _downloadFile(self, src, dest):
-        url = PartialUrlOpener()
+        dl = PartialUrlOpener()
         curSize = -1
         if os.path.exists(dest):
-            of = open(dest,"ab")
+            out = open(dest,"ab")
             curSize = os.path.getsize(dest)
             dl.addheader("Range","bytes=%s-" % (curSize))
         else:
-            of = open(dest,"wb")
+            out = open(dest,"wb")
 
-        src = url.open(src)
+        src = dl.open(src)
         if int(src.headers['Content-Length']) == curSize: 
             return
 
@@ -166,7 +164,7 @@ class Downloader(threading.Thread):
         self.start()
 
     def run(self):
-        dl = PartialDownlader(self, self.destDir)
+        dl = PartialDownlader(self.destDir)
         rpc = xmlrpclib.ServerProxy(self.urlSrc)
         updates = rpc.getUpdateUrls(self.curVer)
         for update in updates:
@@ -202,14 +200,14 @@ class Patcher:
         This runs patches that have been found. This is run in order
         so the lowest patches are run first, then the next ones etal
         """
-        files = glob.glob(os.path.join(updateDir, '*.' + PATCH_EXT))
+        files = glob.glob(os.path.join(updatesDir, '*.' + PATCH_EXT))
         #sort the files so that we patch in the right order
         files.sort(key=lambda x:int(os.path.splitext(os.path.basename(x))))
         for f in files:
             tmpDir = tempfile.mkdtemp() 
 
-            self.extract(f, tempdir)
-            self.applyPatch(destDir, tmpDir)
+            self.extract(f, tmpDir)
+            self.applyPatch(srcDir, tmpDir)
 
             shutil.rmtree(tmpDir)
 
@@ -221,7 +219,7 @@ class Patcher:
         """
         Given two directories, this applies the patch to srcdir from patchdir
         """
-        with open(os.path.join(updateDir, PATCH_CFG)) as cfgFile:
+        with open(os.path.join(patchDir, PATCH_CFG)) as cfgFile:
             cfg = json.loads(cfgFile.read())
 
         #apply all patch files
@@ -258,7 +256,7 @@ class Patcher:
         e = os.spawnl(os.P_WAIT, BSPATCH, src, src, patch)
         
     def patchFile(self, src, patch):
-        self.patchBinFile(self, src, patch)
+        self.patchBinFile(src, patch)
 
 
 class DiffError(Exception):
@@ -276,11 +274,11 @@ class Diff:
         cfg = {
             'deleted' : [],
         }
-        tmpDir = tempdir.mkdtemp() 
+        tmpDir = tempfile.mkdtemp() 
         for root, dirs, files in os.walk(newDir):
             for f in files:
                 absfn = os.path.join(root, f)
-                fn = fn[len(newDir) + len(os.sep):]
+                fn = absfn[len(newDir) + len(os.sep):]
                 oldfn = os.path.join(oldDir, fn)
 
                 filecfg = cfg[fn] = {}
@@ -319,7 +317,7 @@ class Diff:
 
     def zipDir(self, srcDir, outputFile):
         assert os.path.isdir(srcDir)
-        with closing(zipfile.ZipFile(outputFile, "w", zipfile.ZIP_DEFLATED)) as z:
+        with zipfile.ZipFile(outputFile, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(srcDir):
                 for fn in files:
                     absfn = os.path.join(root, fn)
