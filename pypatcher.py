@@ -53,6 +53,15 @@ class PartialDownlader(threading.Thread):
     """
     Basically, sometimes we want to be able to resume a download
     as some people may have slow connections or whatever.
+
+    This allows us to resume downloads, so we should be able to cope
+    with downloading large files
+
+    It uses a sqlite database to store information on what files have been downloaded
+    from what url.
+
+    @TODO this should only allow one process to access a directory. This
+    should be handled by creating a .lock file
     """
     def __init__(self, srcDir):
         c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
