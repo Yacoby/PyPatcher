@@ -42,7 +42,7 @@ NEW_DIR = 'newfs'
 MERGED_FILES = 'files'
 
 def getFileMd5(filePath):
-    h = hashlib.md5.new()
+    h = hashlib.md5()
     with open(filePath) as f:
         h.update(f.read())
     return h.hexdigest()
