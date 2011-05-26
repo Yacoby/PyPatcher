@@ -28,19 +28,28 @@ class PartialDownlader(Thread):
     It uses a sqlite database to store information on what files have been downloaded
     from what url.
 
-    @TODO this should only allow one process to access a directory. This
-    should be handled by creating a .lock file
     """
     def __init__(self, srcDir):
         c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
         self.con = c()
         self.threadcon = c()
+        
         self.toDownload = queue.Queue()
+        self.srcDir = os.path.abspath(srcDir)
+
+        lockFn = os.path.join(srcDir, '.lock')
+        if os.path.exists(lockFn):
+            raise Exception('Already an instance downloading')
+
+        open(lockFn, 'w').close()
 
         self._sqlCreateTbl()
         results = self.con.execute('SELECT * FROM downloads').fetchall()
         for r in results:
             self.toDownload.put(r)
+
+    def __del__(self):
+        os.remove(os.path.join(self.srcDir, '.lock'))
 
     def add(self, urlsrc, fileName, partialExt='.par'):
         """
@@ -48,11 +57,12 @@ class PartialDownlader(Thread):
         outside the thread even when the thread is running (as long
         as sqlite is fine being called from multiple processes)
         """
+        path = os.path.join(self.srcDir, fileName)
         #add to queue. Queue copes with threads fine
         self.toDownload.put({
             'src' : urlsrc,
-            'tmp' : fileName + partialExt,
-            'dst' : fileName
+            'tmp' : path + partialExt,
+            'dst' : path 
         }) 
 
         #add to db in case we need to resume
