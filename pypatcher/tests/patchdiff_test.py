@@ -1,3 +1,4 @@
+import os
 import shutil
 import unittest
 import tempfile
@@ -18,17 +19,17 @@ class TestSimple(unittest.TestCase):
         in the patching process
         """
         orig = os.path.join(self.wd, 'orig')
-        origF = os.path.join(new, 'new.file')
-
         new = os.path.join(self.wd, 'new')
+
         newF = os.path.join(new, 'new.file')
+        origF = os.path.join(new, 'new.file')
 
         patchF = os.path.join(self.wd, 'patch.file')
         temp = os.path.join(self.wd, 'temp')
 
         os.makedirs(orig)
         os.makedirs(new)
-        with open(newF) as f:
+        with open(newF, 'w') as f:
             f.write('some text')
 
         patchdiff.generateDiff(orig, new, patchF)
