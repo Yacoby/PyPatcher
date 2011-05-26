@@ -89,14 +89,16 @@ class PartialDownlader(Thread):
         self.start()
 
     def run(self):
+        downloadedFiles = []
         while not self.toDownload.empty():
             dlInfo = self.toDownload.get()
             self._downloadFile(dlInfo['src'], dlInfo['tmp'])
             shutil.move(dlInfo['tmp'], dlInfo['dst'])
             self._sqlTRemoveDl(dlInfo['dst'])
+            downloadedFiles.append(dlInfo['dst'])
 
         if self.callback:
-            self.callback()
+            self.callback(downloadedFiles)
 
     def _downloadFile(self, src, dest):
         dl = PartialUrlOpener()

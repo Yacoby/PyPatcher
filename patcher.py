@@ -29,7 +29,7 @@ class BackgroundProgramPatcher:
                 return 'job' in cfg and cfg['job'] == 'runpatch'
         return False
 
-    def patchProgram(self,cfgFile='patch.cfg'): 
+    def patchProgram(self): 
         fh = open(self.cfgPath)
         cfg = json.loads(fh.readlines())
         fh.close()
@@ -40,10 +40,12 @@ class BackgroundProgramPatcher:
             if cfg['job'] == 'applybinpatch':
                 oldBin   = cfg['oldbin'] 
                 self.waitForExit(os.path.basename(oldBin))
-                self.applyPatchedFiles(srcDir, patchDir)
-                self.cleanTmp(patchDir)
-                os.popenv(os.P_NOWAIT, oldBin, oldBin)
+
+                patchdiff.applyPatchDirectory(srcDir, patchDir)
+                shutil.rmtree(patchDir)
+
                 os.remove(cfgFile)
+                os.popenv(os.P_NOWAIT, oldBin, oldBin)
                 self.exit()
             elif cfg['job'] == 'runpatch':
                 self.runPatch(srcDir, patchDir)
@@ -93,21 +95,13 @@ class BackgroundProgramPatcher:
         to patch a running python file. Unpack the patch, extract
         and then restart the application
         """
-        self.applyPatchedFiles(srcDir, patchDir)
-        self.cleanTmp(patchDir)
+        patchdiff.applyPatchDirectory(srcDir, patchDir)
+        shutil.rmtree(patchDir)
         os.remove(cfgName)
         os.execl(sys.executable, sys.executable, *sys.argv)
 
     def exit(self):
         sys.exit()
-
-    def applyPatchedFiles(self, srcDir, tmpDir):
-        """
-        This copys patch files to the new directory, overwriting files that already exist
-        then it deletes the files in the patch directory
-        """
-        shutil.rmtree(tmpDir)
-
 
     def isFrozen(self):
         """
@@ -119,24 +113,27 @@ class BackgroundProgramPatcher:
 
     def downloadAndPrePatch(self, urlSrc):
         """
-        This downloads patches and does the basic work applying the first patch
+        This downloads patches and does the basic work that can
+        be done while the program is running (i.e. doesn't require
+        any files to be replaced)
         """
         d = Downloader()
         d.downloadUpdates(urlSrc, destDir, curVer, self.prePath)
         
-    def prePatch(self):
+    def prePatch(self, downloadedFiles):
         """
         This is run in another another thread (the download thread) as it
         is the callback from the above function. This function runs the
         patches in a directory and setups the job for the next startup
         """
-        p = Patcher()
-        p.patch(srcDir, updatesDir, outputDir)
+        srcDir = ?
+        outDir = tempfile.mkdtemp()
+        patchdiff.mergePatches(srcDir, outDir, patchFiles)
 
         cfg = {}
         cfg['job'] = 'runpatch'
-        cfg['srcdir'] = 
-        cfg['patchdir'] = outputDir
+        cfg['srcdir'] = srcDir
+        cfg['patchdir'] = outDir
         fh = open(self.cfgPath, 'w')
         fh.write(json.dumps(cfg))
         fh.close()
