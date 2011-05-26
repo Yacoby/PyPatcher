@@ -108,6 +108,7 @@ def mergePatches(srcDir, outDir, patchFiles):
     fh.close()
 
 def _extract(inputFile, destDir):
+    assert ( os.path.isfile(inputFile) )
     with zipfile.ZipFile(inputFile) as zf:
         zf.extractall(destDir)
 
@@ -133,7 +134,7 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
             outAbsFn = os.path.join(outDir, MERGED_FILES, fn)
             if os.path.exists(outAbsFn):
                 os.remove(outAbsFn)
-            shutil.copy(absFn, outAbsFn)
+            _createCopy2(absFn, outAbsFn)
 
             if fn in delList:
                 delList.remove(fn)

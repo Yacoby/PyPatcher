@@ -34,7 +34,8 @@ class TestSimple(unittest.TestCase):
             f.write('some text')
 
         patchdiff.generateDiff(orig, new, patchF)
-        patchdiff.mergePatches(orig, [patchF], temp)
+        self.assertTrue( os.path.isfile(patchF) )
+        patchdiff.mergePatches(orig, temp, [patchF])
         patchdiff.applyPatchDirectory(orig, temp)
 
         self.assertTrue(os.path.exists(origF))
