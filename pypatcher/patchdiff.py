@@ -47,6 +47,14 @@ def getFileMd5(filePath):
         h.update(f.read())
     return h.hexdigest()
 
+def _mkdirs(d):
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+def _createCopy2(src, dst):
+    _mkdirs(os.path.dirname(dst))
+    shutil.copy2(src, dst)
+
 #------------------------------------------------------------------------------
 #Patch functions
 
@@ -195,21 +203,27 @@ def generateDiff(oldDir, newDir, outputFile):
 
             filecfg = cfg[fn] = {}
 
-            filecfg['oldmd5'] = getFileMd5(oldfn)
             filecfg['patchedmd5'] = getFileMd5(absfn)
+            if not os.path.exists(oldfn):
+                _createCopy2(absfn,
+                             os.path.join(tmpDir, NEW_DIR , fn))
+            else:
+                filecfg['oldmd5'] = getFileMd5(oldfn)
 
-            filecfg['types'] = 'other'
-            fn = _genFile
-            if fn.endswith('.exe'):
-                filecfg['types'] = 'bin'
-                fn = _genBinFile
+                filecfg['types'] = 'other'
+                func = _genFile
+                if fn.endswith('.exe'):
+                    filecfg['types'] = 'bin'
+                    func = _genBinFile
 
-            fn(os.path.join(oldDir, fn),
-               os.path.join(newDir, fn),
-               os.path.join(tmpDir, PATCH_DIR , fn))
+                func(os.path.join(oldDir, fn),
+                     os.path.join(newDir, fn),
+                     os.path.join(tmpDir, PATCH_DIR , fn))
     
     cfgOut = os.path.join(tmpDir, PATCH_CFG)
-    open(cfgOut).write(json.dumps(cfg)).close()
+    _mkdirs(os.path.dirname(cfgOut))
+    with open(cfgOut, 'w') as f:
+        f.write(json.dumps(cfg))
     _zipDir(tmpDir, outputFile)
 
     shutil.rmtree(tmpDir)

@@ -23,6 +23,7 @@ class TestSimple(unittest.TestCase):
 
         newF = os.path.join(new, 'new.file')
         origF = os.path.join(new, 'new.file')
+        print newF
 
         patchF = os.path.join(self.wd, 'patch.file')
         temp = os.path.join(self.wd, 'temp')
