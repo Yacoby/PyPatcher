@@ -106,17 +106,6 @@ class BackgroundProgramPatcher:
         This copys patch files to the new directory, overwriting files that already exist
         then it deletes the files in the patch directory
         """
-        for root, dirs, files in os.walk(tmpDir):
-            for f in files:
-                absFn = os.path.join(root, f) 
-                fn = absFn[len(tmpDir)+len(os.sep):]
-
-                toAbsFn = os.path.join(srcDir, fn)
-
-                if os.path.exists(toAbsFn):
-                    os.remove(toAbsFn)
-                shutil.move(absFn, toAbsFn)
-
         shutil.rmtree(tmpDir)
 
 
