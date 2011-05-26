@@ -17,7 +17,7 @@ class PartialUrlOpener(urllib.FancyURLopener):
         pass
 
 
-class PartialDownlader(Thread):
+class PartialDownloader(Thread):
     """
     Basically, sometimes we want to be able to resume a download
     as some people may have slow connections or whatever.

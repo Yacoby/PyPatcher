@@ -18,6 +18,7 @@ you merge the temp directory and the origanal source directory
 """
 
 import os
+import shutil
 import tempfile
 import zipfile
 import json
@@ -74,7 +75,7 @@ def applyPatchDirectory(srcDir, patchDir):
             shutil.move(absFn, toAbsFn)
 
     #run deletions
-    fh = open(os.path.join(patchDir,PATCH_CFG) 
+    fh = open(os.path.join(patchDir,PATCH_CFG))
     cfg = json.loads(fh.read())
     fh.close()
     for f in cfg['deleted']:
@@ -85,7 +86,7 @@ def mergePatches(srcDir, outDir, patchFiles):
     This when given a set of pages and a source directory applies the
     patches and puts the output in a output directory.
     """
-    deletedFiles = []
+    delList = []
     for f in patchFiles:
         tmpDir = tempfile.mkdtemp() 
 
@@ -95,7 +96,7 @@ def mergePatches(srcDir, outDir, patchFiles):
         shutil.rmtree(tmpDir)
 
     fh = open(os.path.join(outDir,PATCH_CFG), 'w') 
-    fh.write(json.dumps({'deleted' : deleted}))
+    fh.write(json.dumps({'deleted' : delList}))
     fh.close()
 
 def _extract(inputFile, destDir):
@@ -160,10 +161,10 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 raise PatchError('There was an error patching the file')
     
     #add deleted
-    delFiles.extend(cfg['deleted'])
+    delList.extend(cfg['deleted'])
 
 def _patchBinFile(src, out, patch):
-    e = os.spawnl(os.P_WAIT, BSPATCH, src, out, patch)
+    os.spawnl(os.P_WAIT, BSPATCH, src, out, patch)
     
 def _patchFile(src, out, patch):
     _patchBinFile(src, out, patch)
@@ -214,17 +215,10 @@ def generateDiff(oldDir, newDir, outputFile):
     shutil.rmtree(tmpDir)
 
 def _genFile(old, new, patch):
-    o = open(old)
-    n = open(new)
-    p = open(patch, 'w')
-    p.writelines(difflib.ndiff(o.readlines(),
-                               n.readlines()))
-    o.close()
-    n.close()
-    p.close()
+    _genBinFile(old, new, patch)
 
 def _genBinFile(old, new, patch):
-    e = os.spawnl(os.P_WAIT, BSDIFF, old, new, patch)
+    os.spawnl(os.P_WAIT, BSDIFF, old, new, patch)
 
 def _zipDir(srcDir, outputFile):
     assert os.path.isdir(srcDir)
