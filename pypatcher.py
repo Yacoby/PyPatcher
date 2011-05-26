@@ -6,7 +6,10 @@ method of doing it in python. This means that it is expcected that
 bsdiff.exe and bspath.exe are on the path
 """
 
-import urllib, os, shutil
+import urllib
+import os
+import shutil
+import sys
 import xmlrpclib
 import glob
 import threading
@@ -168,17 +171,19 @@ class ProgramPatcher:
     the user is running the program, and at startup all that will
     need to happen is that the program will need to move some files.
     """
+    def __init__(self, cfgFile='patch.cfg'):
+        self.cfgPath = os.path.abspath(cfgFile)
 
-    def needsPatching(self, cfgFile='patch.cfg'):
-        if os.path.exists(cfgFile):
-            with open(cfgFile) as fh:
+    def needsPatching(self):
+        if os.path.exists(self.cfgPath):
+            with open(self.cfgPath) as fh:
                 cfg = json.loads(cfgFile.readlines())
                 return 'job' in cfg and cfg['job'] == 'runpatch'
         return False
 
     def patchProgram(self,cfgFile='patch.cfg'): 
-        fh = open(cfgFile)
-        cfg = json.loads(cfgFile.readlines())
+        fh = open(self.cfgPath)
+        cfg = json.loads(fh.readlines())
         fh.close()
 
         if 'job' in cfg:
@@ -214,11 +219,24 @@ class ProgramPatcher:
         This copies the binary exe to a new location and runs it,
         with the argument to apply a patch
         """
-        newName = sys.execuatable + '.patcher'
+
+        #rewrite the config file so that we change the job
+        fh = open(self.cfgPath)
+        cfg = json.loads(fh.read())
+        cfg['job'] = 'applybinpatch'
+        fh.close()
+
+        fh = open(self.cfgPath, 'w')
+        fh.write(json.dumps(cfg))
+        fh.close()
+
+        #clone the binary so that we can patch it and run it
+        newName = sys.executable + '.patcher'
         if os.path.exists(newName):
             os.remove(newName)
         shutil.copy(sys.executable, newName)
         os.popenv(os.P_NOWAIT, newName, newName, '--applypatch')
+        
         self.exit()
 
     def runPyPatch(self, cfgName, srcDir, patchDir):
@@ -238,8 +256,21 @@ class ProgramPatcher:
     def applyPatchedFiles(self, srcDir, tmpDir):
         """
         This copys patch files to the new directory, overwriting files that already exist
+        then it deletes the files in the patch directory
         """
-        pass
+        for root, dirs, files in os.walk(tmpDir):
+            for f in files:
+                absFn = os.path.join(root, f) 
+                fn = absFn[len(tmpDir)+len(os.sep):]
+
+                toAbsFn = os.path.join(srcDir, fn)
+
+                if os.path.exists(toAbsFn):
+                    os.remove(toAbsFn)
+                shutil.move(absFn, toAbsFn)
+
+        shutil.rmtree(tmpDir)
+
 
     def isFrozen(self):
         """
@@ -249,6 +280,30 @@ class ProgramPatcher:
                 or hasattr(sys, "importers") # old py2exe
                 or imp.is_frozen("__main__")) # tools/freeze
 
+    def downloadAndPrePatch(self, urlSrc):
+        """
+        This downloads patches and does the basic work applying the first patch
+        """
+        d = Downloader()
+        d.downloadUpdates(urlSrc, destDir, curVer, self.prePath)
+        
+    def prePatch(self):
+        """
+        This is run in another another thread (the download thread) as it
+        is the callback from the above function. This function runs the
+        patches in a directory and setups the job for the next startup
+        """
+        p = Patcher()
+        p.patch(srcDir, updatesDir, outputDir)
+
+        cfg = {}
+        cfg['job'] = 'runpatch'
+        cfg['srcdir'] = 
+        cfg['patchdir'] = outputDir
+        fh = open(self.cfgPath, 'w')
+        fh.write(json.dumps(cfg))
+        fh.close()
+        
 
 class Downloader(threading.Thread):
     """
@@ -300,7 +355,7 @@ class Patcher:
         """
         return len(glob.glob(os.path.join(updateDir, '*.' + PATCH_EXT))) > 0
 
-    def patch(self, srcDir, updatesDir):
+    def patch(self, srcDir, outDir, updatesDir):
         """
         This runs patches that have been found. This is run in order
         so the lowest patches are run first, then the next ones etal
@@ -312,7 +367,7 @@ class Patcher:
             tmpDir = tempfile.mkdtemp() 
 
             self.extract(f, tmpDir)
-            self.applyPatch(srcDir, tmpDir)
+            self.applyPatch(srcDir, outDir, tmpDir)
 
             shutil.rmtree(tmpDir)
 
@@ -320,9 +375,11 @@ class Patcher:
         with zipfile.ZipFile(inputFile) as zf:
             zf.extractall(destDir)
 
-    def applyPatch(self, srcDir, patchDir):
+    def applyPatch(self, srcDir, outDir, patchDir):
         """
         Given two directories, this applies the patch to srcdir from patchdir
+        If the file to be patched already exists in ouputDir, then the patch
+        will be run on the file in outputDir.
         """
         with open(os.path.join(patchDir, PATCH_CFG)) as cfgFile:
             cfg = json.loads(cfgFile.read())
@@ -332,36 +389,44 @@ class Patcher:
         for root, dirs, files in os.walk(patchFilesDir):
             #root contains patchdir, which we don't want
             for f in files:
-                
-                absfn = os.path.join(root, f) 
-                fn = absfn[len(patchFilesDir)+len(os.sep):]
-                srcfn = os.path.join(srcDir, fn)
+                absFn = os.path.join(root, f) 
+                fn = absFn[len(patchFilesDir)+len(os.sep):]
+                srcAbsFn = os.path.join(srcDir, fn)
+                outAbsFn = os.path.join(outDir, fn)
 
                 filecfg = cfg[fn]
 
-                if os.path.exists(srcfn):
-                    if getFileMd5(srcfn) != filecfg['oldmd5']:
+                if os.path.exists(outAbsFn):
+                    toPatchAbsFn = outAbsFn
+                else:
+                    toPatchAbsFn = srcAbsFn
+                    
+                if os.path.exists(toPatchAbsFn):
+                    if getFileMd5(toPatchAbsFn) != filecfg['oldmd5']:
                         raise PatchError('The old patch file wasn\' correct')
 
                 if filecfg['type'] == 'bin':
                     func = self.patchBinFile
                 else:
                     func = self.patchFile
-                func(srcfn, absfn)
+                func(toPatchAbsFn, absFn, outAbsFn)
 
-                if getFileMd5(srcfn) != filecfg['patchedmd5']:
+                if getFileMd5(outAbsFn) != filecfg['patchedmd5']:
                     raise PatchError('There was an error patching the file')
         
-        #delete files that need deleting
+        #this needs sorting due to the change of method.
+        #we shouldn't delete this here we should merge
+        #it so that it with other applied patches and
+        #then do it in one go when we "run" the patch
         for d in cfg['deleted']:
             delPath = os.path.join(srcDir, d)
             #TODO
 
-    def patchBinFile(self, src, patch):
-        e = os.spawnl(os.P_WAIT, BSPATCH, src, src, patch)
+    def patchBinFile(self, src, out, patch):
+        e = os.spawnl(os.P_WAIT, BSPATCH, src, out, patch)
         
-    def patchFile(self, src, patch):
-        self.patchBinFile(src, patch)
+    def patchFile(self, src, out, patch):
+        self.patchBinFile(src, out, patch)
 
 
 class DiffError(Exception):
