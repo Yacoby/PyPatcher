@@ -24,14 +24,13 @@ import zipfile
 import json
 import hashlib
 
+from diffpatchmatch import diff_match_patch 
+
 from partialdl import PartialDownloader
 
 #the binary patching/dif files
-BSDIFF = 'bsdiff.exe'
-BSPATCH = 'bspatch.exe'
-
-#the extension for the downloaded patch files
-PATCH_EXT = 'cpatch'
+BSDIFF = 'bsdiff'
+BSPATCH = 'bspatch'
 
 #the name of the config file that holds details about the patch
 PATCH_CFG = 'cfg.json'
@@ -41,18 +40,33 @@ PATCH_DIR = 'patchfs'
 NEW_DIR = 'newfs'
 MERGED_FILES = 'files'
 
+def _getFileContents(filePath, mode='r')
+    f = open(filePath)
+    contents = f.read(mode)
+    f.close()
+    return contents
+
 def getFileMd5(filePath):
     h = hashlib.md5()
-    with open(filePath) as f:
-        h.update(f.read())
+    h.update(_getFileContents(filePath))
     return h.hexdigest()
 
 def _mkdirs(d):
+    """
+    Makes directories, but doesn't throw an error if
+    the directory exists
+    """
     if not os.path.exists(d):
         os.makedirs(d)
 
 def _createCopy2(src, dst):
+    """
+    Creates a of a file but ensures directories
+    exist and overwrites the dst if it exists
+    """
     _mkdirs(os.path.dirname(dst))
+    if os.path.exists(dst):
+        os.remove(dst)
     shutil.copy2(src, dst)
 
 #------------------------------------------------------------------------------
@@ -160,10 +174,10 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 if getFileMd5(toPatchAbsFn) != filecfg['oldmd5']:
                     raise PatchError('The old patch file wasn\' correct')
 
-            if filecfg['type'] == 'bin':
-                func = _patchBinFile
-            else:
-                func = _patchFile
+            if filecfg['type'] == 'bsdiff':
+                func = _patchBin
+            elif filecfg['type'] == 'text':
+                func = _patchText
             func(toPatchAbsFn, absFn, outAbsFn)
 
             if getFileMd5(outAbsFn) != filecfg['patchedmd5']:
@@ -172,11 +186,18 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
     #add deleted
     delList.extend(cfg['deleted'])
 
-def _patchBinFile(src, out, patch):
+def _patchBin(src, out, patch):
     os.spawnl(os.P_WAIT, BSPATCH, src, out, patch)
     
-def _patchFile(src, out, patch):
-    _patchBinFile(src, out, patch)
+def _patchText(src, out, patch):
+    o = diff_match_patch()
+    txt = _getFileContents(src)
+    patchTxt = _getFileContents(patch)
+    outTxt = o.patch_apply(o.patch_fromText(patch), txt)
+    
+    f = open(outTxt, 'w')
+    f.write(outTxt)
+    f.close()
 
 #------------------------------------------------------------------------------
 #Diff functions
@@ -184,6 +205,25 @@ def _patchFile(src, out, patch):
 class DiffError(Exception):
     pass
 
+
+def _isText(filePath):
+    """
+    This roughly follows perls idea of checking file types.
+    A text file can't have nulls, and the amount of non text
+    ascii has to be less than 30%
+    """
+    textCharacters = "".join(map(chr, range(32, 127)) + list("\n\r\t\b"))
+    nullTrans = string.maketrans("", "")
+    with open(filePath) as fh:
+        out = fh.read(1024)
+        if not out:
+            return True
+
+        if "\0" in out:
+            return False
+        t = s.translate(_null_trans, text_characters)
+        return float(len(t))/len(s) < 0.3
+    return False
 
 def generateDiff(oldDir, newDir, outputFile):
     """
@@ -211,11 +251,12 @@ def generateDiff(oldDir, newDir, outputFile):
             else:
                 filecfg['oldmd5'] = getFileMd5(oldfn)
 
-                filecfg['types'] = 'other'
-                func = _genFile
-                if fn.endswith('.exe'):
-                    filecfg['types'] = 'bin'
-                    func = _genBinFile
+                if _isText(absfn):
+                    filecfg['types'] = 'text'
+                    func = _genTextPatch
+                else: #use bsdiff for anything with think is binary
+                    filecfg['types'] = 'bsdiff'
+                    func = _genBinPatch
 
                 func(os.path.join(oldDir, fn),
                      os.path.join(newDir, fn),
@@ -227,12 +268,23 @@ def generateDiff(oldDir, newDir, outputFile):
         f.write(json.dumps(cfg))
     _zipDir(tmpDir, outputFile)
 
+    assert ( os.path.exists(outputFile) )
+    assert ( os.path.isfile(outputFile) )
+
     shutil.rmtree(tmpDir)
 
-def _genFile(old, new, patch):
-    _genBinFile(old, new, patch)
+def _genTextPatch(old, new, patch):
+    oldTxt = _getFileContents(old)
+    newTxt = _getFileContents(new)
+    
+    o = diff_patch_match()
+    patchTxt = o.patch_toText(o.patch_make(oldTxt, newTxt))
 
-def _genBinFile(old, new, patch):
+    f = open(patch, 'w')
+    f.write(patchTxt)
+    f.close()
+
+def _genBinPatch(old, new, patch):
     os.spawnl(os.P_WAIT, BSDIFF, old, new, patch)
 
 def _zipDir(srcDir, outputFile):
