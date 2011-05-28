@@ -5,6 +5,17 @@ from threading import Thread
 
 import patchdiff
 
+def _jsonFromFile(filePath):
+    f = open(filePath)
+    j = json.loads(f.read())
+    f.close()
+    return j
+
+def _jsonToFile(filePath, j):
+    f = open(filePath, 'w')
+    f.write(json.dumps(j))
+    f.close()
+
 class BackgroundProgramPatcher:
     """
     This class attempts to patch a program. This can be run from the program
@@ -18,52 +29,67 @@ class BackgroundProgramPatcher:
     It is expected that much of the patch work will be done while
     the user is running the program, and at startup all that will
     need to happen is that the program will need to move some files.
+
+    In some cases, this may need to exit the program and create a new instance
+    of the program to apply patches. The communication is done using a config
+    file
     """
     def __init__(self, cfgFile='patch.cfg'):
         self.cfgPath = os.path.abspath(cfgFile)
 
     def needsPatching(self):
+        """
+        Returns true if there are patches downloaded and they need
+        to be applied. If this is true then it means that control
+        needs to be handed to the patchProgram function to patch
+        """
         if os.path.exists(self.cfgPath):
-            with open(self.cfgPath) as fh:
-                cfg = json.loads(cfgFile.readlines())
-                return 'job' in cfg and cfg['job'] == 'runpatch'
+            return 'job' in _jsonFromFile(self.cfgPath)
+        return False
+
+    def hasPatchesDownloading(self):
+        if os.path.exists(self.cfgPath):
+            return 'current_downloads' in _jsonFromFile(self.cfgPath)
         return False
 
     def patchProgram(self): 
-        fh = open(self.cfgPath)
-        cfg = json.loads(fh.readlines())
-        fh.close()
+        """
+        This patches the program
+        """
+        cfg = _jsonFromFile(self.cfgPath)
 
         if 'job' in cfg:
             srcDir   = cfg['srcdir']
             patchDir = cfg['patchdir']
             if cfg['job'] == 'applybinpatch':
-                oldBin   = cfg['oldbin'] 
+                oldBin = cfg['oldbin'] 
                 self.waitForExit(os.path.basename(oldBin))
 
                 patchdiff.applyPatchDirectory(srcDir, patchDir)
                 shutil.rmtree(patchDir)
 
-                os.remove(cfgFile)
+                os.remove(self.cfgPath)
                 os.popenv(os.P_NOWAIT, oldBin, oldBin)
-                self.exit()
+                sys.exit()
             elif cfg['job'] == 'runpatch':
-                self.runPatch(srcDir, patchDir)
+                self._runPatch(srcDir, patchDir)
 
-
-    def waitForExit(self, binName):
+    def _waitForExit(self, binName):
+        """
+        Waits for a process to exit
+        """
         pass
 
-    def runPatch(self, cfgName, srcDir, patchDir):
+    def _runPatch(self, srcDir, patchDir):
         """
         Starts the patch process
         """
-        if self.isFrozen():
-            self.runFrozenPatch(srcDir, patchDir)
+        if self._isFrozen():
+            self._startFrozenPatch(srcDir, patchDir)
         else:
-            self.runPyPatch(cfgName, srcDir, patchDir)
+            self._runPyPatch(srcDir, patchDir)
     
-    def runFrozenPatch(self, srcDir, patchFile):
+    def _startFrozenPatch(self, srcDir, patchFile):
         """
         Does the first part in patching a running exe
         This copies the binary exe to a new location and runs it,
@@ -71,25 +97,20 @@ class BackgroundProgramPatcher:
         """
 
         #rewrite the config file so that we change the job
-        fh = open(self.cfgPath)
-        cfg = json.loads(fh.read())
+        cfg = _jsonFromFile(self.cfgPath)
         cfg['job'] = 'applybinpatch'
-        fh.close()
-
-        fh = open(self.cfgPath, 'w')
-        fh.write(json.dumps(cfg))
-        fh.close()
+        _jsonToFile(self.cfgPath, cfg)
 
         #clone the binary so that we can patch it and run it
         newName = sys.executable + '.patcher'
         if os.path.exists(newName):
             os.remove(newName)
         shutil.copy(sys.executable, newName)
-        os.popenv(os.P_NOWAIT, newName, newName, '--applypatch')
+        os.popenv(os.P_NOWAIT, newName, newName)
         
-        self.exit()
+        sys.exit()
 
-    def runPyPatch(self, cfgName, srcDir, patchDir):
+    def _runPyPatch(self, srcDir, patchDir):
         """
         As python doesn't keep open python files, it is trivial
         to patch a running python file. Unpack the patch, extract
@@ -97,13 +118,10 @@ class BackgroundProgramPatcher:
         """
         patchdiff.applyPatchDirectory(srcDir, patchDir)
         shutil.rmtree(patchDir)
-        os.remove(cfgName)
+        os.remove(self.cfgPath)
         os.execl(sys.executable, sys.executable, *sys.argv)
 
-    def exit(self):
-        sys.exit()
-
-    def isFrozen(self):
+    def _isFrozen(self):
         """
         This should return true if the program that is being run is a compiled exe
         """
@@ -111,41 +129,67 @@ class BackgroundProgramPatcher:
                 or hasattr(sys, "importers") # old py2exe
                 or imp.is_frozen("__main__")) # tools/freeze
 
-    def downloadAndPrePatch(self, urlSrc):
+    def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest, getPatchesFunc):
         """
         This downloads patches and does the basic work that can
         be done while the program is running (i.e. doesn't require
         any files to be replaced)
+
+        srcDir - This is the directory to be patched
+        tmpDir - This is the directory where tempary patch files are stored
+        patchDest - This is the directory where the compiled patches are 
+                    downloaded to
+        getPatchesFunc - This funciton should get a list of patch urls, in the
+                         order they should be applied
         """
-        d = Downloader()
-        d.downloadUpdates(urlSrc, destDir, curVer, self.prePath)
+        cfg = _jsonFromFile(self.cfgPath)
+        if 'current_downloads' in cfg:
+            patchInfo = cfg['current_downloads']
+        else:
+            patchInfo = getPatchesFunc()
+            cfg['current_downloads'] = patchInfo
+            _jsonToFile(self.cfgPath, cfg)
+
+        urlToName = lambda x: hashlib.md5(x).hexdigest() 
+
+        def prePatch():
+            """
+            This is run in another another thread (the download thread) 
+            This function runs the patches in a directory and setups
+            the job for the next startup
+            """
+            patchFiles = []
+            for p in patchInfo:
+                patchFiles.append(os.path.join(patchDest, urlToName(p)))
+            patchdiff.mergePatches(srcDir, tmpDir, patchFiles)
+
+            #trash and rewrite the config
+            cfg = {}
+            cfg['job'] = 'runpatch'
+            cfg['srcdir'] = srcDir
+            cfg['patchdir'] = tmpDir 
+            _jsonToFile(self.cfgPath, cfg)
+
+        dl = PartialDownlader(patchDest)
+        for update in patchInfo:
+            dl.add(update, urlToName(update))
+        dl.startDownload(prePatch)
         
-    def prePatch(self, downloadedFiles):
-        """
-        This is run in another another thread (the download thread) as it
-        is the callback from the above function. This function runs the
-        patches in a directory and setups the job for the next startup
-        """
-        srcDir = ?
-        outDir = tempfile.mkdtemp()
-        patchdiff.mergePatches(srcDir, outDir, patchFiles)
 
-        cfg = {}
-        cfg['job'] = 'runpatch'
-        cfg['srcdir'] = srcDir
-        cfg['patchdir'] = outDir
-        fh = open(self.cfgPath, 'w')
-        fh.write(json.dumps(cfg))
-        fh.close()
-        
-
-class Downloader(Thread):
+class UpdateDownloader(Thread):
     """
-    This is a threaded class that allows patches to be downloaded in
-    the background. 
-
-    It is expected that the urlSrc is a xmlrpc server
+    This should be extended and passed to the BackgroundProgramPatcher
+    to allow the patcher to manage the download of programs in the background
     """
+    
+    def getUpdateUrls(self, currentVersion):
+        """
+        This is run from a seperate thread. It should return a list
+        of urls needed to patch the program to the next version. The
+        list should be in the order that patches should be applied
+        """
+        raise Exception('This is not implemented but it shoud be')
+
     def downloadUpdates(self, urlSrc, destDir, curVer, callback=None):
         """
         This downloads updates into the directory dest. If there is no newer
@@ -158,9 +202,5 @@ class Downloader(Thread):
         self.start()
 
     def run(self):
-        dl = PartialDownlader(self.destDir)
         rpc = xmlrpclib.ServerProxy(self.urlSrc)
         updates = rpc.getUpdateUrls(self.curVer)
-        for update in updates:
-            dl.add(update['url'], update['version'] + '.' + PATCH_EXT)
-        dl.startDownload(self.callback)
