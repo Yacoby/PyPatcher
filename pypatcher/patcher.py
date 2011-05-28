@@ -5,6 +5,7 @@ import json
 import shutil
 from threading import Thread
 import imp #for checking if frozen
+import traceback
 
 import patchdiff
 from partialdl import PartialDownloader
@@ -19,6 +20,16 @@ def _jsonToFile(filePath, j):
     f = open(filePath, 'w')
     f.write(json.dumps(j))
     f.close()
+
+class Error(Exception):
+    pass
+
+class BrokenError(Exception):
+    """
+    This is in the case that the patching
+    process is borked.
+    """
+    pass
 
 class BackgroundProgramPatcher:
     """
@@ -37,12 +48,25 @@ class BackgroundProgramPatcher:
     In some cases, this may need to exit the program and create a new instance
     of the program to apply patches. The communication is done using a config
     file
+
+    The hardest part is ensuring that the patching process doesn't prevent the
+    program from starting
     """
     PATCH_JOB = 'job'
     CUR_DOWNLOADS = 'curdl'
 
     def __init__(self, cfgFile='patch.cfg'):
         self.cfgPath = os.path.abspath(cfgFile)
+        if not os.path.exists(os.dirname(self.cfgPath)):
+            raise Error('The config path doesn\'t exist')
+ 
+    def _setBroken(self):
+        try:
+            cfg = _jsonFromFile(self.cfgPath)
+            cfg['broke'] = True
+            _jsonToFile(self.cfgPath, cfg)
+        except:
+            pass
 
     def needsPatching(self):
         """
@@ -62,26 +86,26 @@ class BackgroundProgramPatcher:
     def patchProgram(self): 
         """
         This patches the program
+
+        This catches every error that might occur. 
+        and rethrows. This is because we don't want patching
+        to get in the way of program starting
         """
-        cfg = _jsonFromFile(self.cfgPath)
+        try:
+            cfg = _jsonFromFile(self.cfgPath)
 
-        if self.PATCH_JOB in cfg:
-            srcDir   = cfg['srcdir']
-            patchDir = cfg['patchdir']
-            if cfg[self.PATCH_JOB] == 'applybinpatch':
-                oldBin = cfg['oldbin'] 
-                self._waitForExit(os.path.basename(oldBin))
+            if self.PATCH_JOB in cfg:
+                if cfg[self.PATCH_JOB] == 'applybinpatch':
+                    self._finishFrozenPatch()
+                elif cfg[self.PATCH_JOB] == 'runpatch':
+                    self._runPatch(cfg['srcdir'], cfg['patchdir'])
 
-                patchdiff.applyPatchDirectory(srcDir, patchDir)
-                shutil.rmtree(patchDir)
+        #we don't know the error, so log it and quit
+        except:
+            self._setBroken()
+            raise BrokenError('There was an unknown error')
 
-                os.remove(self.cfgPath)
-                os.spawnv(os.P_NOWAIT, oldBin, oldBin)
-                sys.exit()
-            elif cfg[self.PATCH_JOB] == 'runpatch':
-                self._runPatch(srcDir, patchDir)
-
-    def _waitForExit(self, binName):
+    def _waitForExit(self, binName, timeout=5):
         """
         Waits for a process to exit
         """
@@ -89,7 +113,8 @@ class BackgroundProgramPatcher:
 
     def _runPatch(self, srcDir, patchDir):
         """
-        Starts the patch process
+        Starts the patch process, depending on
+        which method is required
         """
         if self._isFrozen():
             self._startFrozenPatch(srcDir, patchDir)
@@ -106,6 +131,7 @@ class BackgroundProgramPatcher:
         #rewrite the config file so that we change the job
         cfg = _jsonFromFile(self.cfgPath)
         cfg[self.PATCH_JOB] = 'applybinpatch'
+        cfg['oldbin'] = sys.executable
         _jsonToFile(self.cfgPath, cfg)
 
         #clone the binary so that we can patch it and run it
@@ -115,6 +141,32 @@ class BackgroundProgramPatcher:
         shutil.copy(sys.executable, newName)
         os.spawnv(os.P_NOWAIT, newName, newName)
         
+        sys.exit()
+    
+    def _finishFrozenPatch(self):
+        cfg = _jsonFromFile(self.cfgPath)
+        oldBin = cfg['oldbin']
+        srcDir   = cfg['srcdir']
+        patchDir = cfg['patchdir']
+        self._waitForExit(os.path.basename(oldBin))
+
+        try:
+            patchdiff.applyPatchDirectory(srcDir, patchDir)
+        except patchdiff.PatchError:
+            self._setBroken()
+            traceback.print_exc(file='patcherr.log')
+            raise BrokenError(('There was an error patching.'
+                             + ' See patcherr.log for more information'))
+
+        #this probably isn't vital
+        shutil.rmtree(patchDir)
+
+        #this is vital, as if this fails we may get stuck in a loop
+        #if we can't remove it we try and write to it.
+        os.remove(self.cfgPath)
+        
+        #this isn't a problem
+        os.spawnv(os.P_NOWAIT, oldBin, oldBin)
         sys.exit()
 
     def _runPyPatch(self, srcDir, patchDir):
