@@ -23,8 +23,9 @@ import tempfile
 import zipfile
 import json
 import hashlib
+import string
 
-from diffpatchmatch import diff_match_patch 
+from diffmatchpatch import diff_match_patch 
 
 from partialdl import PartialDownloader
 
@@ -40,9 +41,9 @@ PATCH_DIR = 'patchfs'
 NEW_DIR = 'newfs'
 MERGED_FILES = 'files'
 
-def _getFileContents(filePath, mode='r')
-    f = open(filePath)
-    contents = f.read(mode)
+def _getFileContents(filePath, mode='r'):
+    f = open(filePath, mode)
+    contents = f.read()
     f.close()
     return contents
 
@@ -178,7 +179,7 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 func = _patchBin
             elif filecfg['type'] == 'text':
                 func = _patchText
-            func(toPatchAbsFn, absFn, outAbsFn)
+            func(toPatchAbsFn, outAbsFn, absFn)
 
             if getFileMd5(outAbsFn) != filecfg['patchedmd5']:
                 raise PatchError('There was an error patching the file')
@@ -193,9 +194,22 @@ def _patchText(src, out, patch):
     o = diff_match_patch()
     txt = _getFileContents(src)
     patchTxt = _getFileContents(patch)
-    outTxt = o.patch_apply(o.patch_fromText(patch), txt)
+
+    #the result object is a tuple, the first element
+    #is the patched text and the second is an array
+    #of boolean values indicating which patches
+    #were applied
+    result = o.patch_apply(o.patch_fromText(patchTxt), txt)
+
+    if not all(result[1]):
+        raise PatchError(('Not all patches were applied when patching'
+                        + 'the file ' + src + ' with patch ' + patch))
+                            
+
+    outTxt = result[0]
     
-    f = open(outTxt, 'w')
+    _mkdirs(os.path.dirname(out))
+    f = open(out, 'w')
     f.write(outTxt)
     f.close()
 
@@ -221,8 +235,8 @@ def _isText(filePath):
 
         if "\0" in out:
             return False
-        t = s.translate(_null_trans, text_characters)
-        return float(len(t))/len(s) < 0.3
+        tran = out.translate(nullTrans, textCharacters)
+        return float(len(tran))/len(out) < 0.3
     return False
 
 def generateDiff(oldDir, newDir, outputFile):
@@ -252,10 +266,10 @@ def generateDiff(oldDir, newDir, outputFile):
                 filecfg['oldmd5'] = getFileMd5(oldfn)
 
                 if _isText(absfn):
-                    filecfg['types'] = 'text'
+                    filecfg['type'] = 'text'
                     func = _genTextPatch
                 else: #use bsdiff for anything with think is binary
-                    filecfg['types'] = 'bsdiff'
+                    filecfg['type'] = 'bsdiff'
                     func = _genBinPatch
 
                 func(os.path.join(oldDir, fn),
@@ -277,9 +291,10 @@ def _genTextPatch(old, new, patch):
     oldTxt = _getFileContents(old)
     newTxt = _getFileContents(new)
     
-    o = diff_patch_match()
+    o = diff_match_patch()
     patchTxt = o.patch_toText(o.patch_make(oldTxt, newTxt))
 
+    _mkdirs(os.path.dirname(patch))
     f = open(patch, 'w')
     f.write(patchTxt)
     f.close()
