@@ -1,9 +1,13 @@
 import os
+import sys
+import hashlib
 import json
 import shutil
 from threading import Thread
+import imp #for checking if frozen
 
 import patchdiff
+from partialdl import PartialDownloader
 
 def _jsonFromFile(filePath):
     f = open(filePath)
@@ -34,6 +38,9 @@ class BackgroundProgramPatcher:
     of the program to apply patches. The communication is done using a config
     file
     """
+    PATCH_JOB = 'job'
+    CUR_DOWNLOADS = 'curdl'
+
     def __init__(self, cfgFile='patch.cfg'):
         self.cfgPath = os.path.abspath(cfgFile)
 
@@ -44,12 +51,12 @@ class BackgroundProgramPatcher:
         needs to be handed to the patchProgram function to patch
         """
         if os.path.exists(self.cfgPath):
-            return 'job' in _jsonFromFile(self.cfgPath)
+            return self.PATCH_JOB in _jsonFromFile(self.cfgPath)
         return False
 
     def hasPatchesDownloading(self):
         if os.path.exists(self.cfgPath):
-            return 'current_downloads' in _jsonFromFile(self.cfgPath)
+            return self.CUR_DOWNLOADS in _jsonFromFile(self.cfgPath)
         return False
 
     def patchProgram(self): 
@@ -58,20 +65,20 @@ class BackgroundProgramPatcher:
         """
         cfg = _jsonFromFile(self.cfgPath)
 
-        if 'job' in cfg:
+        if self.PATCH_JOB in cfg:
             srcDir   = cfg['srcdir']
             patchDir = cfg['patchdir']
-            if cfg['job'] == 'applybinpatch':
+            if cfg[self.PATCH_JOB] == 'applybinpatch':
                 oldBin = cfg['oldbin'] 
-                self.waitForExit(os.path.basename(oldBin))
+                self._waitForExit(os.path.basename(oldBin))
 
                 patchdiff.applyPatchDirectory(srcDir, patchDir)
                 shutil.rmtree(patchDir)
 
                 os.remove(self.cfgPath)
-                os.popenv(os.P_NOWAIT, oldBin, oldBin)
+                os.spawnv(os.P_NOWAIT, oldBin, oldBin)
                 sys.exit()
-            elif cfg['job'] == 'runpatch':
+            elif cfg[self.PATCH_JOB] == 'runpatch':
                 self._runPatch(srcDir, patchDir)
 
     def _waitForExit(self, binName):
@@ -98,7 +105,7 @@ class BackgroundProgramPatcher:
 
         #rewrite the config file so that we change the job
         cfg = _jsonFromFile(self.cfgPath)
-        cfg['job'] = 'applybinpatch'
+        cfg[self.PATCH_JOB] = 'applybinpatch'
         _jsonToFile(self.cfgPath, cfg)
 
         #clone the binary so that we can patch it and run it
@@ -106,7 +113,7 @@ class BackgroundProgramPatcher:
         if os.path.exists(newName):
             os.remove(newName)
         shutil.copy(sys.executable, newName)
-        os.popenv(os.P_NOWAIT, newName, newName)
+        os.spawnv(os.P_NOWAIT, newName, newName)
         
         sys.exit()
 
@@ -143,11 +150,11 @@ class BackgroundProgramPatcher:
                          order they should be applied
         """
         cfg = _jsonFromFile(self.cfgPath)
-        if 'current_downloads' in cfg:
-            patchInfo = cfg['current_downloads']
+        if self.CUR_DOWNLOADS in cfg:
+            patchInfo = cfg[self.CUR_DOWNLOADS]
         else:
             patchInfo = getPatchesFunc()
-            cfg['current_downloads'] = patchInfo
+            cfg[self.CUR_DOWNLOADS] = patchInfo
             _jsonToFile(self.cfgPath, cfg)
 
         urlToName = lambda x: hashlib.md5(x).hexdigest() 
@@ -165,42 +172,12 @@ class BackgroundProgramPatcher:
 
             #trash and rewrite the config
             cfg = {}
-            cfg['job'] = 'runpatch'
+            cfg[self.PATCH_JOB] = 'runpatch'
             cfg['srcdir'] = srcDir
             cfg['patchdir'] = tmpDir 
             _jsonToFile(self.cfgPath, cfg)
 
-        dl = PartialDownlader(patchDest)
+        dl = PartialDownloader(patchDest)
         for update in patchInfo:
             dl.add(update, urlToName(update))
         dl.startDownload(prePatch)
-        
-
-class UpdateDownloader(Thread):
-    """
-    This should be extended and passed to the BackgroundProgramPatcher
-    to allow the patcher to manage the download of programs in the background
-    """
-    
-    def getUpdateUrls(self, currentVersion):
-        """
-        This is run from a seperate thread. It should return a list
-        of urls needed to patch the program to the next version. The
-        list should be in the order that patches should be applied
-        """
-        raise Exception('This is not implemented but it shoud be')
-
-    def downloadUpdates(self, urlSrc, destDir, curVer, callback=None):
-        """
-        This downloads updates into the directory dest. If there is no newer
-        version then nothing happens
-        """
-        self.urlSrc = urlSrc
-        self.destDir = urlSrc
-        self.curVer = urlSrc
-        self.callback = callback 
-        self.start()
-
-    def run(self):
-        rpc = xmlrpclib.ServerProxy(self.urlSrc)
-        updates = rpc.getUpdateUrls(self.curVer)
