@@ -109,6 +109,8 @@ def mergePatches(srcDir, outDir, patchFiles):
     This when given a set of pages and a source directory applies the
     patches and puts the output in a output directory.
     """
+    _mkdirs(outDir)
+
     delList = []
     for f in patchFiles:
         tmpDir = tempfile.mkdtemp() 
@@ -159,8 +161,8 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
     for root, dirs, files in os.walk(patchFilesDir):
         #root contains patchdir, which we don't want
         for f in files:
-            absFn = os.path.join(root, f) 
-            fn = absFn[len(patchFilesDir)+len(os.sep):]
+            patchAbsFn = os.path.join(root, f) 
+            fn = patchAbsFn[len(patchFilesDir)+len(os.sep):]
             srcAbsFn = os.path.join(srcDir, fn)
             outAbsFn = os.path.join(outDir, MERGED_FILES, fn)
 
@@ -175,6 +177,10 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 if _getFileMd5(toPatchAbsFn) != filecfg['oldmd5']:
                     raise PatchError(('The file ' + toPatchAbsFn + ' has changed'
                                     + ' so cannot be patched'))
+            else:
+                raise PatchError(('The file ' + toPatchAbsFn + ' doesn\' exist'
+                                + ' so cannot be patched'))
+                
 
             if filecfg['type'] == 'bsdiff':
                 func = _patchBin
@@ -182,7 +188,10 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 func = _patchText
             else:
                 raise PatchError('Unknown type')
-            func(toPatchAbsFn, outAbsFn, absFn)
+            func(toPatchAbsFn, outAbsFn, patchAbsFn)
+
+            if not os.path.exists(outAbsFn):
+                raise PatchError('The output from patching: ' + outAbsFn + ' doesn\'t exist')
 
             if _getFileMd5(outAbsFn) != filecfg['patchedmd5']:
                 raise PatchError('There was an error patching the file: ' + toPatchAbsFn)
@@ -191,7 +200,13 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
     delList.extend(cfg['deleted'])
 
 def _patchBin(src, out, patch):
-    os.spawnl(os.P_WAIT, BSPATCH, src, out, patch)
+    assert ( os.path.exists(src) )
+    assert ( os.path.exists(patch) )
+
+    _mkdirs(os.path.dirname(out))
+    e = os.spawnlp(os.P_WAIT, BSPATCH, BSPATCH, src, out, patch)
+    if e != 0:
+        raise PatchError('Error when using ' + BSPATCH + ' to patch ' + src)
     
 def _patchText(src, out, patch):
     o = diff_match_patch()
@@ -302,7 +317,18 @@ def _genTextPatch(old, new, patch):
     f.close()
 
 def _genBinPatch(old, new, patch):
-    os.spawnl(os.P_WAIT, BSDIFF, old, new, patch)
+    assert ( os.path.exists(old) and os.path.isfile(old) )
+    assert ( os.path.exists(new) and os.path.isfile(new) )
+
+    assert ( not os.path.exists(patch) )
+
+    _mkdirs(os.path.dirname(patch))
+    assert ( os.path.exists(os.path.dirname(patch)) )
+
+    e = os.spawnlp(os.P_WAIT, BSDIFF, BSDIFF, old, new, patch)
+    if e != 0:
+        raise DiffError((BSDIFF + ' did not run sucessfully when generating'
+                       + ' patches: ' + old + ' ' + new + ' ' + patch))
 
 def _zipDir(srcDir, outputFile):
     assert os.path.isdir(srcDir)

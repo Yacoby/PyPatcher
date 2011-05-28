@@ -72,6 +72,37 @@ class TestSimple(unittest.TestCase):
 
         self.assertTrue(filecmp.cmp(origF, newF, False))
 
+    def testPatchBin(self):
+        """
+        Tests to see if a binary patch is correctly applied
+        """
+        orig = os.path.join(self.wd, 'orig')
+        new = os.path.join(self.wd, 'new')
+
+        newF = os.path.join(new, 'patched.file')
+        origF = os.path.join(orig, 'patched.file')
+
+        patchF = os.path.join(self.wd, 'patch.file')
+        temp = os.path.join(self.wd, 'temp')
+
+        os.makedirs(orig)
+        os.makedirs(new)
+        with open(origF, 'w') as f:
+            f.write('\0This is \0a binary file')
+        self.assertFalse(patchdiff._isText(origF))
+
+        with open(newF, 'w') as f:
+            f.write('\0This is \0a newer binary file')
+
+        patchdiff.generateDiff(orig, new, patchF)
+        self.assertTrue( os.path.isfile(patchF) )
+        patchdiff.mergePatches(orig, temp, [patchF])
+        patchdiff.applyPatchDirectory(orig, temp)
+
+        self.assertTrue(os.path.exists(origF))
+        self.assertTrue(os.path.exists(newF))
+
+        self.assertTrue(filecmp.cmp(origF, newF, False))
 
 if __name__ == '__main__':
     unittest.main()
