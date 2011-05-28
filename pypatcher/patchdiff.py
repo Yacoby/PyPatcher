@@ -47,7 +47,7 @@ def _getFileContents(filePath, mode='r'):
     f.close()
     return contents
 
-def getFileMd5(filePath):
+def _getFileMd5(filePath):
     h = hashlib.md5()
     h.update(_getFileContents(filePath))
     return h.hexdigest()
@@ -172,17 +172,20 @@ def _applyPatch(srcDir, outDir, patchDir, delList):
                 toPatchAbsFn = srcAbsFn
                 
             if os.path.exists(toPatchAbsFn):
-                if getFileMd5(toPatchAbsFn) != filecfg['oldmd5']:
-                    raise PatchError('The old patch file wasn\' correct')
+                if _getFileMd5(toPatchAbsFn) != filecfg['oldmd5']:
+                    raise PatchError(('The file ' + toPatchAbsFn + ' has changed'
+                                    + ' so cannot be patched'))
 
             if filecfg['type'] == 'bsdiff':
                 func = _patchBin
             elif filecfg['type'] == 'text':
                 func = _patchText
+            else:
+                raise PatchError('Unknown type')
             func(toPatchAbsFn, outAbsFn, absFn)
 
-            if getFileMd5(outAbsFn) != filecfg['patchedmd5']:
-                raise PatchError('There was an error patching the file')
+            if _getFileMd5(outAbsFn) != filecfg['patchedmd5']:
+                raise PatchError('There was an error patching the file: ' + toPatchAbsFn)
     
     #add deleted
     delList.extend(cfg['deleted'])
@@ -204,7 +207,6 @@ def _patchText(src, out, patch):
     if not all(result[1]):
         raise PatchError(('Not all patches were applied when patching'
                         + 'the file ' + src + ' with patch ' + patch))
-                            
 
     outTxt = result[0]
     
@@ -258,12 +260,12 @@ def generateDiff(oldDir, newDir, outputFile):
 
             filecfg = cfg[fn] = {}
 
-            filecfg['patchedmd5'] = getFileMd5(absfn)
+            filecfg['patchedmd5'] = _getFileMd5(absfn)
             if not os.path.exists(oldfn):
                 _createCopy2(absfn,
                              os.path.join(tmpDir, NEW_DIR , fn))
             else:
-                filecfg['oldmd5'] = getFileMd5(oldfn)
+                filecfg['oldmd5'] = _getFileMd5(oldfn)
 
                 if _isText(absfn):
                     filecfg['type'] = 'text'
