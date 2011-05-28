@@ -104,5 +104,41 @@ class TestSimple(unittest.TestCase):
 
         self.assertTrue(filecmp.cmp(origF, newF, False))
 
+    def testMultiple(self):
+        """
+        Tests to see if we can do multiple patches
+        """
+        NUM_PATCHES = 2
+
+        dirs = []
+        for i in range(NUM_PATCHES+1):
+            d = os.path.join(self.wd, str(i))
+            dirs.append(d)
+            os.makedirs(d)
+        
+        files = []
+        for i in range(NUM_PATCHES+1):
+            files.append(os.path.join(dirs[i], 'patched.file'))
+
+        patches = []
+        for i in range(NUM_PATCHES):
+            patches.append(os.path.join(self.wd, 'patch.' + str(i)))
+
+        temp = os.path.join(self.wd, 'temp')
+
+        fileText = 'This is some text'
+        for i in range(NUM_PATCHES+1):
+            with open(files[i], 'w') as f:
+                f.write(fileText + str(i))
+
+        for i in range(NUM_PATCHES):
+            patchdiff.generateDiff(dirs[i], dirs[i+1], patches[i])
+            self.assertTrue( os.path.isfile(patches[i]) )
+
+        patchdiff.mergePatches(dirs[0], temp, patches)
+        patchdiff.applyPatchDirectory(dirs[0], temp)
+
+        self.assertTrue(filecmp.cmp(files[0], files[NUM_PATCHES], False))
+
 if __name__ == '__main__':
     unittest.main()
