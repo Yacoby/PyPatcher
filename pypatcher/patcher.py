@@ -57,7 +57,7 @@ class BackgroundProgramPatcher:
 
     def __init__(self, cfgFile='patch.cfg'):
         self.cfgPath = os.path.abspath(cfgFile)
-        if not os.path.exists(os.dirname(self.cfgPath)):
+        if not os.path.exists(os.path.dirname(self.cfgPath)):
             raise Error('The config path doesn\'t exist')
  
     def _setBroken(self):
@@ -76,7 +76,7 @@ class BackgroundProgramPatcher:
         """
         if os.path.exists(self.cfgPath):
             cfg = _jsonFromFile(self.cfgPath)
-            return self.PATCH_JOB in 
+            return self.PATCH_JOB in cfg and not self.BROKE in cfg
         return False
 
     def isBroken(self):
@@ -86,7 +86,9 @@ class BackgroundProgramPatcher:
 
     def hasPatchesDownloading(self):
         if os.path.exists(self.cfgPath):
-            return self.CUR_DOWNLOADS in _jsonFromFile(self.cfgPath)
+            cfg = _jsonFromFile(self.cfgPath)
+            return (self.CUR_DOWNLOADS in _jsonFromFile(self.cfgPath)
+                    and not self.BROKE in cfg)
         return False
 
     def patchProgram(self): 
@@ -97,6 +99,9 @@ class BackgroundProgramPatcher:
         we don't want patching to get in the way of program starting
         """
         try:
+            if self.isBroken():
+                raise Error('Cannot patch if broken')
+
             cfg = _jsonFromFile(self.cfgPath)
 
             if self.PATCH_JOB in cfg:
@@ -216,16 +221,19 @@ class BackgroundProgramPatcher:
                          order they should be applied. This function should
                          call the function passed to it as its first argument
         """
+        if self.isBroken():
+            raise Error('Cannot download patchs if broken')
+
         if not os.path.exists(srcDir):
             raise Error('The src dir doesn\'t exist')
         if not os.path.isdirectory(srcDir):
             raise Error('The src dir isn\'t a directory')
 
         if not os.path.exists(tmpDir):
-            os.mkdirs(tmpDir)
+            os.makedirs(tmpDir)
 
         if not os.path.exists(patchDest):
-            os.mkdirs(patchDest)
+            os.makedirs(patchDest)
 
         cfg = _jsonFromFile(self.cfgPath)
         if self.CUR_DOWNLOADS in cfg:
@@ -256,7 +264,7 @@ class BackgroundProgramPatcher:
             for the next startup
             """
             patchFiles = []
-            for p in patchInfo:
+            for p in files:
                 patchFiles.append(os.path.join(patchDest, urlToName(p)))
             patchdiff.mergePatches(srcDir, tmpDir, patchFiles)
 
@@ -269,6 +277,6 @@ class BackgroundProgramPatcher:
 
         dl = PartialDownloader(patchDest)
         dl.daemon = True
-        for update in patchInfo:
+        for update in files:
             dl.add(update, urlToName(update))
         dl.startDownload(prePatch)
