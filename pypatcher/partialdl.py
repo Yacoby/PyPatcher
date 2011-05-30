@@ -1,12 +1,10 @@
 import os
 import shutil
 import urllib
+import time
 import sqlite3
 import Queue as queue
 from threading import Thread
-
-#the name of the database that holds the partially downloaded info 
-DB_NAME = 'dl.db'
 
 class LockError(Exception):
     """
@@ -36,38 +34,46 @@ class PartialDownloader(Thread):
     TODO: This could do with reworking, so as to remove the requirment
     to download to a single directory but instead suply a databases.
     """
-    def __init__(self, srcDir):
+    def __init__(self, configFile='downloads.sqlite'):
         Thread.__init__(self)
         self.daemon = True
 
+        self.cfg = configFile
+
         #using a seperate connection for the threaded functions
         #isn't required due to the GIL
-        c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
-        self.con = c()
+        self.con = sqlite3.connect(self.cfg)
         self.con.row_factory = sqlite3.Row
-        self.threadcon = c()
-        self.threadcon.row_factory = sqlite3.Row
         
         self.toDownload = queue.Queue()
         self.srcDir = os.path.abspath(srcDir)
 
-        lockFn = os.path.join(srcDir, '.lock')
-
         self._sqlCreateTbl()
-        results = self.con.execute('SELECT * FROM downloads').fetchall()
+        self._sqlCleanDb()
+        results = self._sqlGetWork()
         for r in results:
             self.toDownload.put(r)
 
-        if os.path.exists(lockFn):
-            raise LockError('Already an instance downloading')
 
-        open(lockFn, 'w').close()
-
-    def __del__(self):
-        try:
-            os.remove(os.path.join(self.srcDir, '.lock'))
-        except OSError:
-            pass
+    def _sqlCleanDb(self):
+        """
+        This cleans old locks that should have been unset but for 
+        whatever reason haven't been
+        """
+        cur = self.con.cursor()
+        cur.execute('''
+                    UPDATE downloads
+                    SET lock=0
+                    WHERE last_lock < date('now', '-1 day')
+                    ''')
+    
+    def _sqlGetWork(self):
+        cur = self.con.cursor()
+        cur.execute('''
+                    SELECT * FROM downloads
+                    WHERE lock=0
+                    ''')
+        return cur.fetchall()
 
     def add(self, urlsrc, fileName, partialExt='.par'):
         """
@@ -85,6 +91,40 @@ class PartialDownloader(Thread):
 
         #add to db in case we need to resume
         self._sqlAddDl(urlsrc, fileName + partialExt, fileName)
+
+    def _sqlSetActive(self, dst, active):
+        """
+        Sets a download as being active from the current time
+        """
+        cur = self.con.cursor()
+        if active:
+            cur.execute('''
+                        UPDATE downloads
+                        SET lock=1,
+                            last_lock=date(\'now\')
+                        WHERE dst=?
+                        ''',
+                        (dst,))
+        else:
+            cur.execute('''
+                        UPDATE downloads
+                        SET lock=0
+                        WHERE dst=?
+                        ''',
+                        (dst,))
+
+    def _sqlIsActive(self, dst):
+        """
+        Returns true if a download is active
+        """
+        cur = self.con.cursor()
+        cur.execute('''
+                    SELECT lock
+                    FROM downloads
+                    WHERE dst=?
+                    ''',
+                    (dst,))
+        return cur.fetchone()['lock']
 
     def _countRow(self, row, val):
         """
@@ -109,8 +149,8 @@ class PartialDownloader(Thread):
                        VALUES (?,?,?)''',
                     (src, tmp, dst))
 
-    def _sqlTRemoveDl(self, dst):
-        cur = self.threadcon.cursor()
+    def _sqlRemoveDl(self, dst):
+        cur = self.con.cursor()
         cur.execute('''DELETE FROM 'downloads'
                        WHERE dst=?''', (dst,))
 
@@ -124,6 +164,8 @@ class PartialDownloader(Thread):
         if cur.fetchone()['count'] == 0:
             cur = self.con.cursor()
             cur.execute('''CREATE TABLE downloads (
+                               lock int default 1,
+                               last_lock datetime,
                                src varchar(255),
                                tmp varchar(255),
                                dst varchar(255) PRIMARY KEY
@@ -145,9 +187,16 @@ class PartialDownloader(Thread):
         downloadedFiles = []
         while not self.toDownload.empty():
             dlInfo = self.toDownload.get()
+
+            if self._sqlIsActive(dlInfo['dst']):
+                continue
+
+            self._sqlSetActive(dlInfo['dst'], True)
             self._downloadFile(dlInfo['src'], dlInfo['tmp'])
+            self._sqlSetActive(dlInfo['dst'], False)
+
             shutil.move(dlInfo['tmp'], dlInfo['dst'])
-            self._sqlTRemoveDl(dlInfo['dst'])
+            self._sqlRemoveDl(dlInfo['dst'])
             downloadedFiles.append(dlInfo['dst'])
 
         if self.callback:
