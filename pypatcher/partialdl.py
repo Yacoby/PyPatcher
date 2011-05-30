@@ -96,8 +96,8 @@ class PartialDownloader(Thread):
                                tmp varchar(255),
                                dst varchar(255)
                            )''')
-                           
-    def startDownload(self, limit=0 callback=None):
+
+    def startDownload(self, limit=0, callback=None):
         """
         Starts downloading the queued files. 
         limit - The limit in kb/s that can be downloaded each second

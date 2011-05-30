@@ -216,7 +216,8 @@ class BackgroundProgramPatcher:
                 or hasattr(sys, "importers") # old py2exe
                 or imp.is_frozen("__main__")) # tools/freeze
 
-    def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest, getPatchesFunc):
+    def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest,
+                                  getPatchesFunc, dlLim=0):
         """
         This downloads patches and does the basic work that can be done while
         the program is running (i.e. doesn't require any files to be replaced)
@@ -266,7 +267,7 @@ class BackgroundProgramPatcher:
         _jsonToFile(self.cfgPath, cfg)
 
         urlToName = lambda x: hashlib.md5(x).hexdigest() 
-        def prePatch():
+        def prePatch(dlFiles):
             """
             This is run in another another thread (the download thread) 
             This function runs the patches in a directory and setups the job
@@ -287,4 +288,4 @@ class BackgroundProgramPatcher:
         dl = PartialDownloader(patchDest)
         for update in files:
             dl.add(update, urlToName(update))
-        dl.startDownload(prePatch)
+        dl.startDownload(limit, prePatch)
