@@ -216,7 +216,8 @@ class BackgroundProgramPatcher:
                 or hasattr(sys, "importers") # old py2exe
                 or imp.is_frozen("__main__")) # tools/freeze
 
-    def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest, getPatchesFunc):
+    def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest,
+                                  getPatchesFunc, dlLim=0):
         """
         This downloads patches and does the basic work that can be done while
         the program is running (i.e. doesn't require any files to be replaced)
@@ -234,7 +235,7 @@ class BackgroundProgramPatcher:
 
         if not os.path.exists(srcDir):
             raise Error('The src dir doesn\'t exist')
-        if not os.path.isdirectory(srcDir):
+        if not os.path.isdir(srcDir):
             raise Error('The src dir isn\'t a directory')
 
         if not os.path.exists(tmpDir):
@@ -243,21 +244,23 @@ class BackgroundProgramPatcher:
         if not os.path.exists(patchDest):
             os.makedirs(patchDest)
 
-        cfg = _jsonFromFile(self.cfgPath)
-        if self.CUR_DOWNLOADS in cfg:
-            self._downloadPrePatch(srcDir,
-                                   tmpDir,
-                                   patchDest,
-                                   cfg[self.CUR_DOWNLOADS])
+
+        #hack for partial function application
+        cb = lambda files: self._downloadPrePatch(srcDir,
+                                                  tmpDir,
+                                                  patchDest,
+                                                  files,
+                                                  dlLim)
+        if os.path.exists(self.cfgPath):
+            cfg = _jsonFromFile(self.cfgPath)
+            if self.CUR_DOWNLOADS in cfg:
+                cb(cfg[self.CUR_DOWNLOADS])
+            else:
+                getPatchesFunc(cb)
         else:
-            #hack for partial function application
-            cb = lambda files: self._downloadPrePatch(srcDir,
-                                                      tmpDir,
-                                                      patchDest,
-                                                      files)
             getPatchesFunc(cb)
 
-    def _downloadPrePatch(self, srcDir, tmpDir, patchDest, files):
+    def _downloadPrePatch(self, srcDir, tmpDir, patchDest, files, limit):
         if not files:
             return
 
@@ -266,7 +269,7 @@ class BackgroundProgramPatcher:
         _jsonToFile(self.cfgPath, cfg)
 
         urlToName = lambda x: hashlib.md5(x).hexdigest() 
-        def prePatch():
+        def prePatch(dlFiles):
             """
             This is run in another another thread (the download thread) 
             This function runs the patches in a directory and setups the job
@@ -287,4 +290,4 @@ class BackgroundProgramPatcher:
         dl = PartialDownloader(patchDest)
         for update in files:
             dl.add(update, urlToName(update))
-        dl.startDownload(prePatch)
+        dl.startDownload(limit, prePatch)

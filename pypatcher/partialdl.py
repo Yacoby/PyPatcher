@@ -30,11 +30,14 @@ class PartialDownloader(Thread):
 
     """
     def __init__(self, srcDir):
+        Thread.__init__(self)
         self.daemon = True
 
         c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
         self.con = c()
+        self.con.row_factory = sqlite3.Row
         self.threadcon = c()
+        self.threadcon.row_factory = sqlite3.Row
         
         self.toDownload = queue.Queue()
         self.srcDir = os.path.abspath(srcDir)
@@ -52,7 +55,10 @@ class PartialDownloader(Thread):
         open(lockFn, 'w').close()
 
     def __del__(self):
-        os.remove(os.path.join(self.srcDir, '.lock'))
+        try:
+            os.remove(os.path.join(self.srcDir, '.lock'))
+        except OSError:
+            pass
 
     def add(self, urlsrc, fileName, partialExt='.par'):
         """
@@ -71,11 +77,28 @@ class PartialDownloader(Thread):
         #add to db in case we need to resume
         self._sqlAddDl(urlsrc, fileName + partialExt, fileName)
 
+    def _countRow(self, row, val):
+        """
+        Warning: doesn't escape row
+        """
+        cur = self.con.cursor()
+        cur.execute(( 'SELECT COUNT(*) AS count '
+                    + 'FROM downloads '
+                    + 'WHERE ' + row + '=?'),
+                    (val,))
+        return cur.fetchone()['count']
+
+    def hasUrl(self, src):
+        return self._countRow('src', src) >= 1
+
+    def hasDst(self, dst):
+        return self._countRow('dst', dst) >= 1
 
     def _sqlAddDl(self, src, tmp, dst):
         cur = self.con.cursor()
         cur.execute('''INSERT INTO 'downloads'
-                       (?,?,?)''', (src, tmp, dst))
+                       VALUES (?,?,?)''',
+                    (src, tmp, dst))
 
     def _sqlTRemoveDl(self, dst):
         cur = self.threadcon.cursor()
@@ -94,10 +117,10 @@ class PartialDownloader(Thread):
             cur.execute('''CREATE TABLE downloads (
                                src varchar(255),
                                tmp varchar(255),
-                               dst varchar(255)
+                               dst varchar(255) PRIMARY KEY
                            )''')
-                           
-    def startDownload(self, limit=0 callback=None):
+
+    def startDownload(self, limit=0, callback=None):
         """
         Starts downloading the queued files. 
         limit - The limit in kb/s that can be downloaded each second
