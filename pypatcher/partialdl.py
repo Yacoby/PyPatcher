@@ -30,6 +30,8 @@ class PartialDownloader(Thread):
 
     """
     def __init__(self, srcDir):
+        self.daemon = True
+
         c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
         self.con = c()
         self.threadcon = c()
@@ -38,15 +40,16 @@ class PartialDownloader(Thread):
         self.srcDir = os.path.abspath(srcDir)
 
         lockFn = os.path.join(srcDir, '.lock')
-        if os.path.exists(lockFn):
-            raise Exception('Already an instance downloading')
-
-        open(lockFn, 'w').close()
 
         self._sqlCreateTbl()
         results = self.con.execute('SELECT * FROM downloads').fetchall()
         for r in results:
             self.toDownload.put(r)
+
+        if os.path.exists(lockFn):
+            raise Exception('Already an instance downloading')
+
+        open(lockFn, 'w').close()
 
     def __del__(self):
         os.remove(os.path.join(self.srcDir, '.lock'))
@@ -94,8 +97,16 @@ class PartialDownloader(Thread):
                                dst varchar(255)
                            )''')
                            
-    def startDownload(self, callback=None):
+    def startDownload(self, limit=0 callback=None):
+        """
+        Starts downloading the queued files. 
+        limit - The limit in kb/s that can be downloaded each second
+        callback - The callback when the downloads are compleat. The
+                    first argument to the callback is a list of downloaded
+                    files
+        """
         self.callback = callback
+        self.limit = limit
         self.start()
 
     def run(self):
@@ -125,10 +136,20 @@ class PartialDownloader(Thread):
             return
 
         while True:
-            data = src.read(8192)
+            dlSize = 10*1000
+            dlStartTime = time.time()
+
+            data = src.read(dlSize)
             if not data:
                 break
             out.write(data)
+
+            #limiter, sleeps if required
+            if self.limit:
+                dlTimeTaken = time.time - dlStartTime
+                minDlTime = dlSize/(self.limit*1000.0)
+                if timeTaken > minDlTime:
+                    time.sleep(minDlTime-dlTimeTaken)
 
         src.close()
         out.close()
