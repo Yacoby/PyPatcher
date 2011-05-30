@@ -166,8 +166,17 @@ class BackgroundProgramPatcher:
         #this probably isn't vital
         shutil.rmtree(patchDir)
 
-        #this is vital, as if this fails we may get stuck in a loop
-        #if we can't remove it we try and write to it.
+        self._removeCfgFile()
+        
+        os.execlp(oldBin, oldBin)
+        sys.exit()
+
+    def _removeCfgFile(self):
+        """
+        This must be removed or at least set to nothing
+        as if it isn't we may get stuck in a loop of trying to 
+        patch the program
+        """
         try:
             os.remove(self.cfgPath)
         except:
@@ -176,9 +185,6 @@ class BackgroundProgramPatcher:
             except:
                 raise BrokenError(('The config file couldn\'t be deleted or'
                                  + ' written to'))
-        
-        os.execlp(oldBin, oldBin)
-        sys.exit()
 
     def _runPyPatch(self, srcDir, patchDir):
         """
@@ -187,13 +193,15 @@ class BackgroundProgramPatcher:
         application
         """
         #vital
-        patchdiff.applyPatchDirectory(srcDir, patchDir)
+        try:
+            patchdiff.applyPatchDirectory(srcDir, patchDir)
+        except patchdiff.PatchError:
+            self._setBroken()
+            raise BrokenError(('There was an error patching.'
+                             + ' See patcherr.log for more information'))
 
-        #not vital
         shutil.rmtree(patchDir)
-
-        #vital
-        os.remove(self.cfgPath)
+        self._removeCfgFile()
 
         #this isn't a problem
         os.spawnlp(sys.executable, sys.executable, *sys.argv)
@@ -252,6 +260,7 @@ class BackgroundProgramPatcher:
     def _downloadPrePatch(self, srcDir, tmpDir, patchDest, files):
         if not files:
             return
+
         cfg = _jsonFromFile(self.cfgPath)
         cfg[self.CUR_DOWNLOADS] = files
         _jsonToFile(self.cfgPath, cfg)
@@ -276,7 +285,6 @@ class BackgroundProgramPatcher:
             _jsonToFile(self.cfgPath, cfg)
 
         dl = PartialDownloader(patchDest)
-        dl.daemon = True
         for update in files:
             dl.add(update, urlToName(update))
         dl.startDownload(prePatch)
