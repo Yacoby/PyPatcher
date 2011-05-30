@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 import os
 
+=======
+>>>>>>> origin/master
 from patcher import BackgroundProgramPatcher, BrokenError, Error
 
 def getPatches(callback):
