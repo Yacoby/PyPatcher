@@ -8,6 +8,14 @@ from threading import Thread
 #the name of the database that holds the partially downloaded info 
 DB_NAME = 'dl.db'
 
+class LockError(Exception):
+    """
+    Occures when an instance of PartialDownloader is already
+    using the class
+    """
+    pass
+    
+
 class PartialUrlOpener(urllib.FancyURLopener):
     """
     Create sub-class in order to overide error 206.  This error means a
@@ -19,20 +27,21 @@ class PartialUrlOpener(urllib.FancyURLopener):
 
 class PartialDownloader(Thread):
     """
-    Basically, sometimes we want to be able to resume a download
-    as some people may have slow connections or whatever.
-
     This allows us to resume downloads, so we should be able to cope
-    with downloading large files
+    with downloading large files or files very slowly
 
     It uses a sqlite database to store information on what files have been downloaded
     from what url.
 
+    TODO: This could do with reworking, so as to remove the requirment
+    to download to a single directory but instead suply a databases.
     """
     def __init__(self, srcDir):
         Thread.__init__(self)
         self.daemon = True
 
+        #using a seperate connection for the threaded functions
+        #isn't required due to the GIL
         c = lambda: sqlite3.connect(os.path.join(srcDir, DB_NAME))
         self.con = c()
         self.con.row_factory = sqlite3.Row
@@ -50,7 +59,7 @@ class PartialDownloader(Thread):
             self.toDownload.put(r)
 
         if os.path.exists(lockFn):
-            raise Exception('Already an instance downloading')
+            raise LockError('Already an instance downloading')
 
         open(lockFn, 'w').close()
 

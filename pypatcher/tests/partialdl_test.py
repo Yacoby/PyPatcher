@@ -18,5 +18,11 @@ class TestSimple(unittest.TestCase):
         self.assertTrue(self.pd.hasUrl('http://www.example.com/file'))
         self.assertTrue(self.pd.hasDst('fn'))
 
+    def testLock(self):
+        self.assertRaises(partialdl.LockError,
+                          partialdl.PartialDownloader,
+                          self.wd)
+        
+
 if __name__ == '__main__':
     unittest.main()
