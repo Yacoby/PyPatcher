@@ -30,10 +30,10 @@ class BrokenError(Exception):
     """
     pass
 
-class BackgroundProgramPatcher:
+class ProgramPatcher:
     """
-    This class attempts to patch a program. This can be run from the program
-    being patched.
+    This contains the core functions for patching a program and is designed
+    to be run from the program being patched
 
     When running as a python script, this isn't a problem. When running as an
     exe it is as we can't replace a running exe. In this case, the solution is
@@ -42,35 +42,24 @@ class BackgroundProgramPatcher:
 
     It is expected that much of the patch work will be done while the user is
     running the program, and at startup all that will need to happen is that
-    the program will need to move some files.
+    the program will need to move some files. Hence the patching is split into
+    two functions.
 
     In some cases, this may need to exit the program and create a new instance
     of the program to apply patches. The communication is done using a config
     file
-
-    The hardest part is ensuring that the patching process doesn't prevent the
-    program from starting
     """
     PATCH_JOB = 'job'
-    CUR_DOWNLOADS = 'curdl'
     BROKE = 'borked'
 
     def __init__(self, cfgFile='patch.cfg'):
         self.cfgPath = os.path.abspath(cfgFile)
         if not os.path.exists(os.path.dirname(self.cfgPath)):
             raise Error('The config path doesn\'t exist')
- 
-    def _setBroken(self):
-        try:
-            cfg = _jsonFromFile(self.cfgPath)
-            cfg[self.BROKE] = True
-            _jsonToFile(self.cfgPath, cfg)
-        except:
-            pass
 
     def needsPatching(self):
         """
-        Returns true if there are patches downloaded and they need to be
+        Returns true if there are patched files that need to be
         applied. If this is true then it means that control needs to be handed
         to the patchProgram function to patch
         """
@@ -79,16 +68,17 @@ class BackgroundProgramPatcher:
             return self.PATCH_JOB in cfg and not self.BROKE in cfg
         return False
 
+    def _setBroken(self):
+        try:
+            cfg = _jsonFromFile(self.cfgPath)
+            cfg[self.BROKE] = True
+            _jsonToFile(self.cfgPath, cfg)
+        except:
+            pass
+
     def isBroken(self):
         if os.path.exists(self.cfgPath):
             return self.BROKE in _jsonFromFile(self.cfgPath)
-        return False
-
-    def hasPatchesDownloading(self):
-        if os.path.exists(self.cfgPath):
-            cfg = _jsonFromFile(self.cfgPath)
-            return (self.CUR_DOWNLOADS in _jsonFromFile(self.cfgPath)
-                    and not self.BROKE in cfg)
         return False
 
     def patchProgram(self): 
@@ -120,6 +110,28 @@ class BackgroundProgramPatcher:
             self._setBroken()
             raise BrokenError('There was an unknown error')
 
+    def prePatchProgram(self, srcDir, tmpDir, patches):
+        """
+        This does work that can be done while the program is running
+        such as generating the patched files
+        """
+        try:
+            patchdiff.mergePatches(srcDir, tmpDir, patches)
+        except patchdiff.PatchError:
+            raise Error(( 'There was an error encounted generating '
+                        + 'patch files'))
+
+        #trash and rewrite the config.
+        try:
+            cfg = {}
+            cfg[self.PATCH_JOB] = 'runpatch'
+            cfg['srcdir'] = srcDir
+            cfg['patchdir'] = tmpDir 
+            _jsonToFile(self.cfgPath, cfg)
+        except:
+            raise Error(( 'There was an error storing the config file. The '
+                        + 'generated patches won\'t be applied' ))
+
     def _runPatch(self, srcDir, patchDir):
         """
         Starts the patch process, depending on which method is required
@@ -134,7 +146,6 @@ class BackgroundProgramPatcher:
         Does the first part in patching a running exe This copies the binary
         exe to a new location and runs it, with the argument to apply a patch
         """
-
         #rewrite the config file so that we change the job
         cfg = _jsonFromFile(self.cfgPath)
         cfg[self.PATCH_JOB] = 'applybinpatch'
@@ -163,11 +174,9 @@ class BackgroundProgramPatcher:
             raise BrokenError(('There was an error patching.'
                              + ' See patcherr.log for more information'))
 
-        #this probably isn't vital
-        shutil.rmtree(patchDir)
-
         self._removeCfgFile()
-        
+
+        shutil.rmtree(patchDir)
         os.execlp(oldBin, oldBin)
         sys.exit()
 
@@ -192,7 +201,6 @@ class BackgroundProgramPatcher:
         running python file. Unpack the patch, extract and then restart the
         application
         """
-        #vital
         try:
             patchdiff.applyPatchDirectory(srcDir, patchDir)
         except patchdiff.PatchError:
@@ -200,10 +208,9 @@ class BackgroundProgramPatcher:
             raise BrokenError(('There was an error patching.'
                              + ' See patcherr.log for more information'))
 
-        shutil.rmtree(patchDir)
         self._removeCfgFile()
 
-        #this isn't a problem
+        shutil.rmtree(patchDir)
         os.spawnlp(sys.executable, sys.executable, *sys.argv)
         sys.exit()
 
@@ -215,6 +222,21 @@ class BackgroundProgramPatcher:
         return (hasattr(sys, "frozen") # new py2exe
                 or hasattr(sys, "importers") # old py2exe
                 or imp.is_frozen("__main__")) # tools/freeze
+
+
+class BackgroundProgramPatcher(ProgramPatcher):
+    """
+    This class is designed to mimic chromes patching behavior in that
+    it downloads the files in the background
+    """
+    CUR_DOWNLOADS = 'curdl'
+
+    def hasPatchesDownloading(self):
+        if os.path.exists(self.cfgPath):
+            cfg = _jsonFromFile(self.cfgPath)
+            return (self.CUR_DOWNLOADS in _jsonFromFile(self.cfgPath)
+                    and not self.BROKE in cfg)
+        return False
 
     def downloadAndPrePatch(self, srcDir, tmpDir,  patchDest,
                                   getPatchesFunc, dlLim=0):
@@ -274,20 +296,23 @@ class BackgroundProgramPatcher:
             This is run in another another thread (the download thread) 
             This function runs the patches in a directory and setups the job
             for the next startup
+
+            The one thing to be awear of is that the files downloaded may not
+            be all the files as if another program is downloading some of them
+            they won't be downloaded by this process. Hence it is required
+            to check if the files exist 
             """
             patchFiles = []
             for p in files:
-                patchFiles.append(os.path.join(patchDest, urlToName(p)))
-            patchdiff.mergePatches(srcDir, tmpDir, patchFiles)
+                f = os.path.join(patchDest, urlToName(p))
+                if not os.path.exists(f):
+                    return
+                patchFiles.append(f)
 
-            #trash and rewrite the config
-            cfg = {}
-            cfg[self.PATCH_JOB] = 'runpatch'
-            cfg['srcdir'] = srcDir
-            cfg['patchdir'] = tmpDir 
-            _jsonToFile(self.cfgPath, cfg)
+            self.prePatchProgram(srcDir, tmpDir, patchFiles)
 
-        dl = PartialDownloader(patchDest)
+        #setup downloader and download all required files
+        dl = PartialDownloader()
         for update in files:
-            dl.add(update, urlToName(update))
+            dl.add(update, os.path.join(patchDest, urlToName(update)))
         dl.startDownload(limit, prePatch)
