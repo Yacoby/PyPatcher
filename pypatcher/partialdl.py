@@ -46,7 +46,6 @@ class PartialDownloader(Thread):
         self.con.row_factory = sqlite3.Row
         
         self.toDownload = queue.Queue()
-        self.srcDir = os.path.abspath(srcDir)
 
         self._sqlCreateTbl()
         self._sqlCleanDb()
@@ -75,22 +74,20 @@ class PartialDownloader(Thread):
                     ''')
         return cur.fetchall()
 
-    def add(self, urlsrc, fileName, partialExt='.par'):
+    def add(self, urlsrc, filePath, partialExt='.par'):
         """
         Adds a file that needs downloading. This can be called from 
-        outside the thread even when the thread is running (as long
-        as sqlite is fine being called from multiple processes)
+        outside the thread even when the thread is running
         """
-        path = os.path.join(self.srcDir, fileName)
         #add to queue. Queue copes with threads fine
         self.toDownload.put({
             'src' : urlsrc,
-            'tmp' : path + partialExt,
-            'dst' : path 
+            'tmp' : filePath + partialExt,
+            'dst' : filePath 
         }) 
 
         #add to db in case we need to resume
-        self._sqlAddDl(urlsrc, fileName + partialExt, fileName)
+        self._sqlAddDl(urlsrc, filePath + partialExt, filePath)
 
     def _sqlSetActive(self, dst, active):
         """
@@ -227,10 +224,10 @@ class PartialDownloader(Thread):
 
             #limiter, sleeps if required
             if self.limit:
-                dlTimeTaken = time.time - dlStartTime
+                dlTimeTaken = time.time() - dlStartTime
                 minDlTime = dlSize/(self.limit*1000.0)
-                if timeTaken > minDlTime:
-                    time.sleep(minDlTime-dlTimeTaken)
+                if dlTimeTaken > minDlTime:
+                    time.sleep(dlTimeTaken-minDlTime)
 
         src.close()
         out.close()
